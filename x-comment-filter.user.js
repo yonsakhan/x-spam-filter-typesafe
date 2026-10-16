@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X 评论垃圾过滤 (TypeSafe/Jev)
 // @namespace    local.x-comment-filter
-// @version      0.3.0
+// @version      0.3.1
 // @description  用 TypeSafe Jev 语义判断过滤 X 评论区垃圾评论（引流广告、乱码变体、无意义刷屏），支持自定义屏蔽样例
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -56,7 +56,8 @@
         <option value="collapse">2. 折叠成占位条（可点开）</option>
       </select>
       <div style="margin-bottom:4px">自定义屏蔽样例（每行一条，最多 50 条；语义类似的评论会被拦截）</div>
-      <textarea id="xcf-examples" rows="4" placeholder="例如：&#10;只入身体😄💋不入生活&#10;兼职日结 加V" style="width:100%;box-sizing:border-box;background:#000;border:1px solid #2f3336;color:#e7e9ea;border-radius:6px;padding:6px;margin-bottom:10px;resize:vertical"></textarea>
+      <textarea id="xcf-examples" rows="4" placeholder="例如：&#10;只入身体😄💋不入生活&#10;兼职日结 加V" style="width:100%;box-sizing:border-box;background:#000;border:1px solid #2f3336;color:#e7e9ea;border-radius:6px;padding:6px;margin-bottom:6px;resize:vertical"></textarea>
+      <button id="xcf-import" style="width:100%;background:transparent;border:1px solid #2f3336;color:#1d9bf0;border-radius:6px;padding:6px;margin-bottom:10px;cursor:pointer">📥 从 X 账号导入屏蔽词</button>
       <div id="xcf-stats" style="font-size:12px;color:#71767b;margin-bottom:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="xcf-save" style="background:#1d9bf0;border:none;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer">保存</button>
@@ -93,6 +94,40 @@
       modal.querySelector('#xcf-clear').textContent = '已清空 ✓';
     };
     modal.querySelector('#xcf-close').onclick = () => modal.remove();
+    modal.querySelector('#xcf-import').onclick = () => importMutedWords(modal);
+  }
+
+  // 读取 X 账号已有的屏蔽词（走 X 网页端内部接口，接口变动会失败并提示）
+  async function importMutedWords(modal) {
+    const btn = modal.querySelector('#xcf-import');
+    btn.textContent = '导入中…';
+    try {
+      const ct0 = (document.cookie.match(/(?:^|;\s*)ct0=([^;]+)/) || [])[1];
+      if (!ct0) throw new Error('未找到登录凭据，请确认已登录 X');
+      const BEARER = 'AAAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+      const res = await fetch('https://x.com/i/api/1.1/mutes/keywords/list.json', {
+        headers: {
+          'authorization': 'Bearer ' + decodeURIComponent(BEARER),
+          'x-csrf-token': ct0,
+          'x-twitter-auth-type': 'OAuth2Session',
+          'x-twitter-active-user': 'yes',
+        },
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (data.muted_keywords || []);
+      const words = list.map(w => (w.keyword || '').trim()).filter(Boolean);
+      if (!words.length) { btn.textContent = '账号里没有屏蔽词'; return; }
+      const merged = [...new Set([...CFG.examples, ...words])].slice(0, 50);
+      const added = merged.length - CFG.examples.length;
+      CFG.examples = merged;
+      GM_setValue('custom_examples', CFG.examples);
+      modal.querySelector('#xcf-examples').value = merged.join('\n');
+      btn.textContent = `已导入 ${words.length} 条（新增 ${added}，共 ${merged.length}）`;
+    } catch (e) {
+      btn.textContent = '导入失败：' + e.message;
+    }
   }
 
   function ensureButton() {
