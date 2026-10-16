@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X 评论垃圾过滤 (TypeSafe/Jev)
 // @namespace    local.x-comment-filter
-// @version      0.2.1
-// @description  用 TypeSafe Jev 语义判断隐藏 X 评论区的垃圾评论（引流广告、乱码变体、无意义刷屏）
+// @version      0.3.0
+// @description  用 TypeSafe Jev 语义判断过滤 X 评论区垃圾评论（引流广告、乱码变体、无意义刷屏），支持自定义屏蔽样例
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @grant        GM_xmlhttpRequest
@@ -24,6 +24,7 @@
     threshold: GM_getValue('threshold', 0.85),
     onlyStatusPages: GM_getValue('only_status_pages', true),
     handleMode: GM_getValue('handle_mode', 'collapse'),
+    examples: GM_getValue('custom_examples', ['只入身体😄💋不入生活']),
     stats: GM_getValue('stats', { judged: 0, hidden: 0, cacheHits: 0, errors: 0, inputTokens: 0, outputTokens: 0 }),
   };
   const verdictCache = GM_getValue('verdict_cache', {});
@@ -41,7 +42,7 @@
     const s = CFG.stats;
     const modal = document.createElement('div');
     modal.id = 'xcf-modal';
-    modal.style.cssText = 'position:fixed;right:16px;bottom:64px;z-index:99999;width:300px;background:#16181c;color:#e7e9ea;border:1px solid #2f3336;border-radius:12px;padding:16px;font:14px/1.5 sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.5);';
+    modal.style.cssText = 'position:fixed;right:16px;bottom:64px;z-index:99999;width:320px;background:#16181c;color:#e7e9ea;border:1px solid #2f3336;border-radius:12px;padding:16px;font:14px/1.5 sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.5);';
     modal.innerHTML = `
       <div style="font-weight:700;margin-bottom:10px">X 评论过滤设置</div>
       <div style="margin-bottom:4px">TypeSafe API Key</div>
@@ -54,6 +55,8 @@
         <option value="hide">1. 直接隐藏</option>
         <option value="collapse">2. 折叠成占位条（可点开）</option>
       </select>
+      <div style="margin-bottom:4px">自定义屏蔽样例（每行一条，最多 50 条；语义类似的评论会被拦截）</div>
+      <textarea id="xcf-examples" rows="4" placeholder="例如：&#10;只入身体😄💋不入生活&#10;兼职日结 加V" style="width:100%;box-sizing:border-box;background:#000;border:1px solid #2f3336;color:#e7e9ea;border-radius:6px;padding:6px;margin-bottom:10px;resize:vertical"></textarea>
       <div id="xcf-stats" style="font-size:12px;color:#71767b;margin-bottom:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="xcf-save" style="background:#1d9bf0;border:none;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer">保存</button>
@@ -65,6 +68,7 @@
     modal.querySelector('#xcf-th').value = CFG.threshold;
     modal.querySelector('#xcf-only-status').checked = CFG.onlyStatusPages;
     modal.querySelector('#xcf-mode').value = CFG.handleMode;
+    modal.querySelector('#xcf-examples').value = CFG.examples.join('\n');
     modal.querySelector('#xcf-stats').textContent =
       `已判断 ${s.judged} · 已隐藏 ${s.hidden} · 缓存命中 ${s.cacheHits} · 失败 ${s.errors} · tokens ${s.inputTokens}/${s.outputTokens}`;
     modal.querySelector('#xcf-save').onclick = () => {
@@ -76,6 +80,10 @@
       GM_setValue('only_status_pages', CFG.onlyStatusPages);
       CFG.handleMode = modal.querySelector('#xcf-mode').value;
       GM_setValue('handle_mode', CFG.handleMode);
+      CFG.examples = modal.querySelector('#xcf-examples').value
+        .split('\n').map(s => s.trim()).filter(Boolean)
+        .slice(0, 50).map(s => s.slice(0, 200));
+      GM_setValue('custom_examples', CFG.examples);
       modal.querySelector('#xcf-save').textContent = '已保存 ✓';
       scan();
     };
@@ -148,14 +156,15 @@
           author_handle: authorHandle || '',
           text: commentText,
         },
+        blocked_examples: CFG.examples,
       },
       questions: {
         is_spam: {
           type: 'noul',
-          instructions: '结合评论内容和发布者昵称、用户名，判断这条对主帖的评论是否是垃圾信息？垃圾信息包括：引流广告、色情/赌博/加密货币推广、卖粉卖赞、线下报名/兼职类营销、刷屏灌水、与主帖内容无关的蹭热度回复。发布者昵称含营销词汇或emoji符号（如"线下报名""兼职""💧💎"）、用户名为无意义随机字母数字，也是垃圾账号的典型特征。',
+          instructions: '结合评论内容和发布者昵称、用户名，判断这条对主帖的评论是否是垃圾信息？垃圾信息包括：引流广告、色情/赌博/加密货币推广、约炮/性暗示引流、卖粉卖赞、线下报名/兼职类营销、刷屏灌水、与主帖内容无关的蹭热度回复。发布者昵称含营销词汇或emoji符号（如"线下报名""兼职""💧💎"）、用户名为无意义随机字母数字，也是垃圾账号的典型特征。另外，`blocked_examples` 是用户手工标记的垃圾评论样例；评论在语义上与任一样例类似（换字、换词、换符号的变体都算）时，也应判为垃圾信息。',
           criteria: {
-            true: '评论是广告引流、推广、刷屏或蹭热度内容，或发布者昵称/用户名呈明显营销号、垃圾号特征',
-            false: '评论是真实用户针对主帖的正常表达（观点、情绪、提问、玩梗均可），发布者昵称正常',
+            true: '评论是广告引流、推广、性暗示引流、刷屏或蹭热度内容；或与 `blocked_examples` 中样例语义类似；或发布者昵称/用户名呈明显营销号、垃圾号特征',
+            false: '评论是真实用户针对主帖的正常表达（观点、情绪、提问、玩梗均可），发布者昵称正常，且与所有样例都不类似',
           },
         },
         is_gibberish: {
@@ -301,13 +310,14 @@
     if (!CFG.apiKey) return;
     if (CFG.onlyStatusPages && !location.pathname.includes('/status/')) return;
     const own = getOwnHandle();
+    const examplesSig = hash53(CFG.examples.join('\n'));
     document.querySelectorAll('article[data-testid="tweet"]').forEach(article => {
       if (processed.has(article)) return;
       processed.add(article);
       const info = extract(article);
       if (!info) return;
       if (own && info.handle === own) return;
-      const key = hash53(info.handle + '|' + info.name + '|' + info.text);
+      const key = hash53(examplesSig + '|' + info.handle + '|' + info.name + '|' + info.text);
       const cached = verdictCache[key];
       if (cached) {
         CFG.stats.cacheHits++; saveStats();
